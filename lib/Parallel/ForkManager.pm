@@ -557,6 +557,38 @@ sub wait_one_child {
     $s->on_finish( $kid, $? >> 8 , $id, $? & 0x7f, $? & 0x80 ? 1 : 0, $retrieved);
     last;
   }
+
+  # https://rt.cpan.org/Public/Bug/Display.html?id=38724
+  if ( $kid == -1 ) {
+
+    # Make sure there are not 'package zombies', i.e. processes
+    # that have exited, but are somehow still in the tracking hash
+
+    for my $kid (keys %{$s->{'processes'}}) {
+      unless (kill (0, $kid)) {
+
+        # retrieve child data structure, if any
+        my $retrieved = undef;
+        my $storable_tempfile = File::Spec->catfile($s->{tempdir}, 'Parallel-ForkManager-' . $$ . '-' . $kid . '.txt');
+        if (-e $storable_tempfile) {  # child has option of not storing anything, so we need to see if it did or not
+          $retrieved = eval { return &retrieve($storable_tempfile); };
+
+          # handle Storables errors
+          if (not $retrieved or $@) {
+            warn(qq|The storable module was unable to retrieve the child's data structure from the temporary file "$storable_tempfile":  | . join(', ', $@));
+          }
+
+          # clean up after ourselves
+          unlink $storable_tempfile;
+        }
+
+        my $id = delete $s->{processes}->{$kid};
+
+        $s->on_finish( $kid, $? >> 8 , $id, $? & 0x7f, $? & 0x80 ? 1 : 0, $retrieved);
+      }
+    }
+  }
+
   $kid;
 };
 
